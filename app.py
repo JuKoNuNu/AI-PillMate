@@ -1,11 +1,9 @@
-'''
-python -m venv pill-env
-pill-env\Scripts\activate
-ip install -r requirements.txt
-streamlit run app2.py
-'''
+#pip install streamlit pandas pillow pytesseract requests
+# 실행 : streamlit run app.py
+
 
 import streamlit as st 
+import os
 import pandas as pd
 import numpy as np
 from PIL import Image
@@ -13,6 +11,15 @@ import cv2
 import easyocr
 import difflib
 import re
+import openai
+from openai import OpenAI
+from dotenv import load_dotenv
+
+
+load_dotenv(dotenv_path=r"C:\Users\user\Desktop\projects\DOUZONE_project2\.env")
+# print(os.environ['OPENAI_API_KEY'])
+OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 st.set_page_config(page_title="AI 기반 약 인식 시스템", layout="wide")
 reader = easyocr.Reader(['en', 'ko'])
@@ -153,7 +160,7 @@ def is_combination_question(question: str) -> bool:
     return any(k in q for k in comb_keywords)
 
 
-def main():
+def ocr_page():
     st.title("약 이미지 인식 기반 정보 제공 시스템")
 
     marge_all = pd.read_excel("final_data.xlsx")
@@ -253,6 +260,274 @@ def main():
         else:
             st.info("선택한 약이 없습니다.")
 
+# 메인 함수
+def chatbot_page():
+    st.title("AI 기반 다제약물(중복 복용) 예방 챗봇")
+    st.markdown("**약물 관련 궁금한 점이나 증상을 입력하면 추천 약을 보여드립니다.**")
 
+    # 사용자 상태 초기화
+    if 'forbid' not in st.session_state:
+        st.session_state.forbid = '해당 사항 없음'
+    
+    # 선택된 약품 목록 초기화
+    if 'selected_drugs' not in st.session_state:
+        st.session_state.selected_drugs = []
+        
+    # 요청 상태 초기화 (NEW: 요청 버튼 상태 관리)
+    if 'request_submitted' not in st.session_state:
+        st.session_state.request_submitted = False
+
+    st.subheader("⚠️ 사용자 상태 선택")
+    forbid_options = ['임산부', '노인', '중복의약품 문의', '해당 사항 없음']    # 버튼 작업 완료
+    cols = st.columns(len(forbid_options))
+    for i, option in enumerate(forbid_options):
+        if cols[i].button(option, key=f"btn_{i}"):
+            st.session_state.forbid = option
+            # 상태가 변경되면 선택된 약품 목록 초기화
+            st.session_state.selected_drugs = []
+            # 요청 상태 초기화 (NEW)
+            st.session_state.request_submitted = False
+            st.success(f"선택된 사용자 상태: {option}")
+    
+    # 데이터
+    marge_all = pd.read_excel("final_data.xlsx")
+    main_df, preg_df, old_df, dup_df =  marge_all
+
+    # [UPDATED] 중복의약품 문의 전용 입력 구성 - 반응형 개선 및 중복 ID 해결
+    placeholder = st.empty()
+    
+    # 중복의약품 문의 전용 입력 및 처리
+    if st.session_state.forbid == '중복의약품 문의':
+        # 중복의약품 문의 전용 입력 필드
+        dup_question = st.text_input("📝 질문 또는 증상을 입력하세요 (예: 중복복용 등)", key="dup_question_input")
+        
+        with placeholder.container():
+            st.markdown("### 💊 현재 드시고 계신 의약품 관련 정보 입력")
+
+            with st.expander("중복 복용 주의 의약품 카테고리 확인하기", expanded=True):
+                dup_categories = [
+                    '선택하세요', '혈압강하작용의약품', '당뇨병용제', '지질저하제', '소화성궤양용제',
+                    '해열진통소염제', '정신신경용제', '호흡기관용약', '마약류 아편유사제', '최면진정제'
+                ]
+                selected_category = st.selectbox("📂 카테고리 선택", dup_categories, key="dup_category_select")
+
+                if selected_category != '선택하세요':
+                    related_dup_drugs = dup_df[dup_df['효능군'] == selected_category]
+                    
+                    if not related_dup_drugs.empty:
+                        st.markdown(f"#### 📋 '{selected_category}' 관련 의약품 목록:")
+                        
+                        # 최대 10개만 표시 (토큰 제한 방지)
+                        display_count = min(10, len(related_dup_drugs))
+                        
+                        # 중복 키 문제 해결: 인덱스를 추가하여 고유한 키 생성
+                        for i in range(display_count):
+                            row = related_dup_drugs.iloc[i]
+                            product_name = row['제품명']
+                            
+                            # 고유한 키 생성 방법 - 인덱스 값을 함께 사용
+                            unique_key = f"drug_{i}_{product_name}"
+                            
+                            # 체크박스로 약품 선택 기능 구현 (고유한 키 사용)
+                            if st.checkbox(f"{product_name}", key=unique_key):
+                                # 선택된 약품 목록에 추가 (중복 방지)
+                                if product_name not in st.session_state.selected_drugs:
+                                    st.session_state.selected_drugs.append(product_name)
+                            elif product_name in st.session_state.selected_drugs:
+                                # 체크 해제 시 목록에서 제거
+                                st.session_state.selected_drugs.remove(product_name)
+                                
+                        # 더 많은 약품이 있으면 알림
+                        if len(related_dup_drugs) > 10:
+                            st.info(f"표시된 약품 외에 {len(related_dup_drugs) - 10}개 더 있습니다. 검색 기능을 사용해보세요.")
+                    else:
+                        st.info("선택한 카테고리에 해당하는 의약품 정보가 없습니다.")
+            
+            # 선택된 약품 목록 표시
+            if st.session_state.selected_drugs:
+                st.markdown("### 🔍 선택된 약품 목록")
+                for selected_drug in st.session_state.selected_drugs:
+                    st.markdown(f"- {selected_drug}")
+        
+
+        # GPT 응답 & 약물 정보 제공공 (중복의약품 문의) - 요청 버튼 추가 (NEW)
+        if dup_question and st.session_state.selected_drugs:
+            # 요청 버튼 추가 (NEW)
+            request_button = st.button("📤 요청하기", key="submit_dup_request")
+            
+            # 요청 버튼을 누르면 요청 상태를 True로 설정 (NEW)
+            if request_button:
+                st.session_state.request_submitted = True
+                st.success("요청이 제출되었습니다.")
+
+                # --- 현재 작업중 ------------------------------------------------------------------------------------------------------------------------------
+
+                if dup_question and st.session_state.request_submitted:
+                    with st.spinner("관련 약품을 찾는 중입니다..."):
+                        drug_df = find_related_drugs(main_df, selected_drug)
+
+                    if drug_df.empty:
+                        st.error("❌ 해당 키워드와 관련된 약품을 찾을 수 없습니다.")
+                        
+                    else:
+                        # 결과 개수 제한 (최대 5개)
+                        display_count = min(5, len(drug_df))
+                        limited_drug_df = drug_df.head(display_count)
+                        
+                        drug_summary_text = "🔎 관련 약품 목록:\n"
+                        for _, row in limited_drug_df.iterrows():
+                            name = row['제품명']
+                            image_filename = row['저장_이미지_파일명']
+                            image_path = os.path.join("images", image_filename)
+
+                            if os.path.exists(image_path):
+                                st.image(image_path, caption=name, width=300)
+                            else:
+                                st.warning(f"이미지 없음: {image_filename}")
+
+                            st.markdown(f"**💊 {name}** ({row['구분']})")
+                            st.markdown(f"**효능:** {row['효능효과']}")
+
+                            precautions = row.get("주의사항_병합", "")
+                            if pd.notna(precautions) and str(precautions).strip() != "":
+                                with st.expander("📌 사용 시 주의사항 보기"):
+                                    st.markdown(str(precautions))
+                            else:
+                                st.markdown("ℹ️ 사용 시 주의사항 정보 없음")
+
+
+                # --- 현재 작업중 -------------------------------------------------------------------------------------------------------------------------------
+            
+            # 요청 버튼이 눌려진 상태일 때만 API 호출 실행 (NEW)
+            if st.session_state.request_submitted:
+                # 선택된 약품만 포함하여 요약 생성 (토큰 제한 문제 해결)
+                drug_dup_summary_text = "🔎 관련 약품 목록:\n"
+                for drug in st.session_state.selected_drugs:
+                    drug_dup_summary_text += f"- {drug}\n"
+                
+                messages = [
+                    {"role": "system", "content": "당신은 약물 복용 정보와 병용 금기 등에 대해 답변하는 약사 AI입니다."},
+                    {"role": "user", "content": f"아래 약 정보 참고해서 답변해주세요:\n{drug_dup_summary_text}\n\n질문: {dup_question}"}
+                ]
+                
+                # 디버깅용 메시지 출력 (선택사항)
+                print(messages)
+                
+                try:
+                    response = client.chat.completions.create(
+                        model=os.environ['OPENAI_API_MODEL'],
+                        messages=messages,
+                        temperature=0.5,
+                        max_tokens=500,
+                    )
+                    answer = response.choices[0].message.content
+                    st.markdown("### 💡 GPT 답변:")
+                    st.markdown(answer)
+                    
+                except Exception as e:
+                    st.error(f"GPT 응답 생성 중 오류 발생: {e}")
+                    st.info("💡 팁: 선택한 약품이 너무 많으면 토큰 제한에 걸릴 수 있습니다. 필요한 약품만 선택해주세요.")
+        elif dup_question and not st.session_state.selected_drugs:
+            st.warning("⚠️ 질문하기 전에 약품을 하나 이상 선택해주세요.")
+    else:
+        # 일반 질문 입력 필드 (중복의약품 문의가 아닐 때만 표시)
+        user_question = st.text_input("📝 질문 또는 증상을 입력하세요 (예: 감기, 비타민 등)", key="general_question_input")
+        
+        # 요청 버튼 추가 (NEW)
+        if user_question:
+            request_button = st.button("📤 요청하기", key="submit_general_request")
+            
+            # 요청 버튼을 누르면 요청 상태를 True로 설정 (NEW)
+            if request_button:
+                st.session_state.request_submitted = True
+                st.success("요청이 제출되었습니다.")
+        
+        # 일반 질문에 대한 처리 - 요청 버튼이 눌려진 상태일 때만 실행 (NEW)
+        if user_question and st.session_state.request_submitted:
+            with st.spinner("관련 약품을 찾는 중입니다..."):
+                drug_df = find_related_drugs(main_df, user_question)
+
+            if drug_df.empty:
+                st.error("❌ 해당 키워드와 관련된 약품을 찾을 수 없습니다.")
+                
+            else:
+                # 결과 개수 제한 (최대 5개)
+                display_count = min(5, len(drug_df))
+                limited_drug_df = drug_df.head(display_count)
+                
+                drug_summary_text = "🔎 관련 약품 목록:\n"
+                for _, row in limited_drug_df.iterrows():
+                    name = row['제품명']
+                    image_filename = row['저장_이미지_파일명']
+                    image_path = os.path.join("images", image_filename)
+
+                    if os.path.exists(image_path):
+                        st.image(image_path, caption=name, width=300)
+                    else:
+                        st.warning(f"이미지 없음: {image_filename}")
+
+                    st.markdown(f"**💊 {name}** ({row['구분']})")
+                    st.markdown(f"**효능:** {row['효능효과']}")
+
+                    precautions = row.get("주의사항_병합", "")
+                    if pd.notna(precautions) and str(precautions).strip() != "":
+                        with st.expander("📌 사용 시 주의사항 보기"):
+                            st.markdown(str(precautions))
+                    else:
+                        st.markdown("ℹ️ 사용 시 주의사항 정보 없음")
+
+                    # 사용자 상태에 따라 추가 정보 출력
+                    if st.session_state.forbid == '임산부':
+                        preg_info = preg_df[preg_df['제품명'] == name]
+                        if not preg_info.empty:
+                            st.error("🚨 임산부 금기 약물입니다!")
+                            st.markdown(f"**금기등급:** {preg_info.iloc[0]['금기등급']}")
+                            st.markdown(f"**상세정보:** {preg_info.iloc[0]['상세정보']}")
+
+                    elif st.session_state.forbid == '노인':
+                        old_info = old_df[old_df['제품명'] == name]
+                        if not old_info.empty:
+                            st.warning("⚠️ 노인 주의 약물입니다.")
+                            st.markdown(f"**약품상세정보:** {old_info.iloc[0]['약품상세정보']}")
+
+                    st.markdown("---")
+                    drug_summary_text += f"- {name}\n"
+                
+                # 더 많은 결과가 있음을 알림
+                if len(drug_df) > display_count:
+                    st.info(f"⚠️ 검색 결과가 많아 상위 {display_count}개만 표시합니다. (총 {len(drug_df)}개 검색됨)")
+
+                # GPT 응답 (일반 질문)
+                messages = [
+                    {"role": "system", "content": "당신은 약물 복용 정보와 병용 금기 등에 대해 답변하는 약사 AI입니다."},
+                    {"role": "user", "content": f"아래 약 정보 참고해서 답변해주세요:\n{drug_summary_text}\n\n질문: {user_question}"}
+                ]
+                
+                # 디버깅용 메시지 출력 (선택사항)
+                print(messages)
+
+                try:
+                    response = client.chat.completions.create(
+                        model=os.environ['OPENAI_API_MODEL'],
+                        messages=messages,
+                        temperature=0.5,
+                        max_tokens=500,
+                    )
+                    answer = response.choices[0].message.content
+                    st.markdown("### 💡 GPT 답변:")
+                    st.markdown(answer)
+                except Exception as e:
+                    st.error(f"GPT 응답 생성 중 오류 발생: {e}")
+
+def main():
+    st.sidebar.title("기능 선택")
+    page = st.sidebar.radio("메뉴", ["OCR", "챗봇"])
+
+    if page == "OCR":
+        ocr_page()
+    elif page == "챗봇":
+        chatbot_page()
+
+# 실행
 if __name__ == "__main__":
     main()
