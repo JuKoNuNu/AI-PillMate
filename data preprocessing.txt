@@ -169,5 +169,5 @@ df["영양제여부"] = df.apply(is_supplement_row, axis=1)
 -------------------------------------------------------------
 
 # 전처리 완료된 데이터 저장
-df.to_excel("marge_all_전처리.xlsx", index=False)
+df.to_excel("final_data.xlsx", index=False)
 
