@@ -67,7 +67,7 @@ def get_google_credentials():
 def get_calendar_service(credentials):
     return build('calendar', 'v3', credentials=credentials)
 
-def create_medication_event(service, drug_name, dosage_time_list, start_date, end_date):
+def create_medication_event(service, drug_name, dosage_time_list, start_date, end_date, usage_instruction="없음"):
     current_date = start_date
     while current_date <= end_date:
         for time in dosage_time_list:
@@ -77,7 +77,7 @@ def create_medication_event(service, drug_name, dosage_time_list, start_date, en
 
             event = {
                 'summary': f'💊 복약: {drug_name} ({time})',
-                'description': f'{drug_name} 복용 시간입니다.',
+                'description': f'{drug_name} 드실 시간입니다.\n 복용 방법 : {usage_instruction}',
                 'start': {
                     'dateTime': start_dt.isoformat(),
                     'timeZone': 'Asia/Seoul',
@@ -98,79 +98,82 @@ def create_medication_event(service, drug_name, dosage_time_list, start_date, en
 
         current_date += datetime.timedelta(days=1)
 
+
 def show_calendar(service, start_date, end_date):
-    time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
-    time_max = datetime.datetime.combine(end_date, datetime.time.max).isoformat() + 'Z'
+        time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
+        time_max = datetime.datetime.combine(end_date, datetime.time.max).isoformat() + 'Z'
 
-    events_result = service.events().list(
-        calendarId='primary',
-        timeMin=time_min,
-        timeMax=time_max,
-        singleEvents=True,
-        orderBy='startTime'
-    ).execute()
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
 
-    events = events_result.get('items', [])
+        events = events_result.get('items', [])
 
-    if not events:
-        st.info("📭 등록된 복약 일정이 없습니다.")
-        return
+        if not events:
+            st.info("📭 등록된 복약 일정이 없습니다.")
+            return
 
-    event_list = []
-    for event in events:
-        event_list.append({
-            "title": event.get("summary", "제목 없음"),
-            "start": event["start"].get("dateTime", event["start"].get("date")),
-            "end": event["end"].get("dateTime", event["end"].get("date"))
-        })
+        event_list = []
+        for event in events:
+            event_list.append({
+                "title": event.get("summary", "제목 없음"),
+                "start": event["start"].get("dateTime", event["start"].get("date")),
+                "end": event["end"].get("dateTime", event["end"].get("date")),
+                "extendedProps": {
+                    "description": event.get("description", "없음")
+                }
+            })
+        event_js_array = json.dumps(event_list, ensure_ascii=False)
 
-    event_js_array = json.dumps(event_list, ensure_ascii=False)
-    
-    html_calendar = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset='utf-8' />
-        <link href='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.css' rel='stylesheet'>
-        <script src='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js'></script>
-        <style>
-        #calendar {{
-            max-width: 1000px;
-            margin: 40px auto;
-        }}
-        </style>
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {{
-            var calendarEl = document.getElementById('calendar');
-            var calendar = new FullCalendar.Calendar(calendarEl, {{
-                initialView: 'timeGridWeek',
-                locale: 'ko',
-                allDaySlot: false,
-                slotMinTime: "06:00:00",
-                slotMaxTime: "23:59:59",
-                height: 'auto',
-                headerToolbar: {{
-                    left: 'prev,next today',
-                    center: 'title',
-                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
-                }},
-                events: {event_js_array},
-                eventClick: function(info) {{
-                    info.jsEvent.preventDefault(); // prevent browser from navigating
-                    alert(info.event.title + "\\n\\n설명: " + (info.event.extendedProps.description || "없음"));
-                }}
+        html_calendar = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset='utf-8' />
+            <link href='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.css' rel='stylesheet'>
+            <script src='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js'></script>
+            <style>
+            #calendar {{
+                max-width: 1000px;
+                margin: 40px auto;
+            }}
+            </style>
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {{
+                var calendarEl = document.getElementById('calendar');
+                var calendar = new FullCalendar.Calendar(calendarEl, {{
+                    initialView: 'timeGridWeek',
+                    locale: 'ko',
+                    allDaySlot: false,
+                    slotMinTime: "06:00:00",
+                    slotMaxTime: "23:59:59",
+                    height: 'auto',
+                    headerToolbar: {{
+                        left: 'prev,next today',
+                        center: 'title',
+                        right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                    }},
+                    events: {event_js_array},
+                    eventClick: function(info) {{
+                        info.jsEvent.preventDefault();
+                        alert(info.event.title + "\\n\\n설명: " + (info.event.extendedProps.description || "없음"));
+                    }}
+                }});
+                calendar.render();
             }});
-            calendar.render();
-        }});
-        </script>
-    </head>
-    <body>
-        <div id='calendar'></div>
-    </body>
-    </html>
-    """
+            </script>
+        </head>
+        <body>
+            <div id='calendar'></div>
+        </body>
+        </html>
+        """
 
-    st.components.v1.html(html_calendar, height=800, scrolling=True)
+        st.components.v1.html(html_calendar, height=800, scrolling=True)
 
 def delete_medication_events(service, start_date, end_date):
     time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
@@ -599,13 +602,32 @@ def ocr_page():
                         st.session_state['google_credentials'] = creds
                         service = get_calendar_service(creds)
 
+                        excel_data = load_excel_data()  # 복용 방법 추출용 엑셀 불러오기
+
                         for key in st.session_state['basket']:
                             drug_info = displayed_candidates[key]
                             qty = st.session_state['basket'][key]["quantity"]
-                            create_medication_event(service, drug_info['제품명'], dosage_times, start_date, end_date)
+                            drug_name = drug_info['제품명']
+
+                            # 복용 방법 추출
+                            usage_instruction = "없음"
+                            row = excel_data[excel_data["제품명"] == drug_name]
+                            if not row.empty:
+                                usage_instruction = row.iloc[0].get("용법용량", "없음")
+
+                            # 일정 등록
+                            create_medication_event(
+                                service,
+                                drug_name,
+                                dosage_times,
+                                start_date,
+                                end_date,
+                                usage_instruction
+                            )
 
                         st.success("✅ 복약 일정이 Google 캘린더에 등록되었습니다.")
                         show_calendar(service, start_date, end_date)
+
                     except Exception as e:
                         st.error(f"❌ 로그인 실패 또는 캘린더 등록 실패: {e}")
 
