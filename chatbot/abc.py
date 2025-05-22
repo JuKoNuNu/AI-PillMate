@@ -1,7 +1,6 @@
 #pip install streamlit pandas pillow pytesseract requests
 # 실행 : streamlit run app.py
 
-
 import os
 import re
 import requests
@@ -12,6 +11,7 @@ from PIL import Image
 import cv2
 import easyocr
 import streamlit as st
+from streamlit_option_menu import option_menu #추가해주셔야합니다!!
 from dotenv import load_dotenv
 import openai
 from openai import OpenAI
@@ -316,8 +316,34 @@ def find_related_drugs(excel_df, user_query, top_n=5):
     columns_needed = ['제품명', '효능효과', '구분', '저장_이미지_파일명', '사용시주의사항']
     return matched[columns_needed].drop_duplicates().head(top_n)
 
-def ocr_page():
-    st.title("약 이미지 인식 기반 정보 제공 시스템")
+
+# 메인 함수
+## 메인 소개 페이지
+
+def main_page():
+    st.markdown("""
+        <h1 style='text-align: center; margin-bottom: 60px;'>💊 AI 기반 다제약물(중복 복용) 예방 챗봇</h1>
+        <h3 style='text-align: left; margin-top: 60px;'>안녕하세요. 비대면 개인 건강 비서입니다!</h3>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+        <div style='
+            margin-top: 30px; border: 2px solid #ccc; border-radius: 10px; padding: 20px; background-color: #f9f9f9;
+        '>
+                이 챗봇은 다음과 같은 기능을 제공합니다: <br><br>
+            📷 <b>알약 이미지 검색</b>: 사진을 업로드하면 알약을 인식하여 복용 중복 가능 정보를 확인할 수 있어요.<br><br>
+            🤖 <b>약 정보 검색 챗봇</b>: 궁금한 약 정보 질문을 하고, AI로부터 답변을 받아보세요.<br><br>
+            💡 <b>기능3</b>: --------<br><br>
+        </div>
+
+        <p style='margin-top: 30px;'>▶ 왼쪽 사이드바에서 기능을 선택해주세요!</p>
+    """, unsafe_allow_html=True)
+
+
+## 기능 1 (ocr)
+
+def chatbot1_page():
+    st.subheader("약 이미지 인식 기반 정보 제공 시스템")
 
     marge_all = pd.read_excel("final_data.xlsx")
     for col in ['제품명', '업체명', '식별표기']:
@@ -416,10 +442,75 @@ def ocr_page():
         else:
             st.info("선택한 약이 없습니다.")
 
-# 메인 함수
-def chatbot_page():
-    st.title("AI 기반 다제약물(중복 복용) 예방 챗봇")
-    st.markdown("**약물 관련 궁금한 점이나 증상을 입력하면 추천 약을 보여드립니다.**")
+
+
+## 기능 2 (챗봇)
+def chatbot2_page():
+    st.subheader("💊 AI 기반 약품 추천 챗봇")
+    st.markdown("사용자 질문에 따라 약 정보를 추천합니다.")
+    user_question = st.text_input("❓ 증상이나 궁금한 약을 입력하세요\n 예시) 내가 지금 몸이 열이 나고 콧물이 나서 코가 막혀 어떤 약이 좋을까? ")
+    df = load_excel_data()
+
+    if user_question:
+        if is_small_talk(user_question):
+            st.markdown("🤖 **기본 대화 응답입니다.**")
+            base_response = f"안녕하세요! 😊 무엇을 도와드릴까요?"
+            st.success("✅ AI 응답 완료")
+            st.markdown(base_response)
+
+        else:
+            st.markdown("🤖 **LlamaIndex 기반 RAG로 답변 중...**")
+            query_engine = get_query_engine()
+            response = query_engine.query(user_question)
+            st.success("✅ AI 응답 완료")
+
+            full_response = response.response
+
+            # 정규식으로 정보 추출
+            product_match = re.search(r"제품명\s*[:：]\s*(.+)", full_response)
+            class_match = re.search(r"구분\s*[:：]\s*(.+)", full_response)
+            effect_match = re.search(r"효능효과\s*[:：]\s*(.+)", full_response)
+
+            product_name = product_match.group(1).strip() if product_match else "알 수 없음"
+            product_class = class_match.group(1).strip() if class_match else ""
+            effect_text = effect_match.group(1).strip() if effect_match else ""
+
+            answer_text = full_response
+            for pattern in [r"제품명\s*[:：].+", r"구분\s*[:：].+", r"효능효과\s*[:：].+"]:
+                answer_text = re.sub(pattern, "", answer_text).strip()
+
+            if product_name.lower() != "알 수 없음":
+                if product_name.lower() != "xxx":
+                    st.markdown(f"### 💊 {product_name} ({product_class})")
+                    st.markdown(f"**AI 답변:** {answer_text}")
+
+                    # 🔹 구글 이미지 출력
+                    google_img_url = google_image_search(google_key, google_cse, product_name, num=1)
+                    if google_img_url:
+                        st.image(google_img_url[0], caption=f"{product_name} (검색 이미지)", width=300)
+                    else:
+                        st.info("🔍 구글 이미지 검색 결과 없음")
+
+                    # 🔹 추가 설명 출력
+                    st.markdown("추가적인 정보입니다.")
+                    st.markdown(f"💊 {product_name} ({product_class})")
+                    st.markdown(f"**효능효과:** {effect_text}")
+
+                    # 🔹 주의사항 출력 (엑셀에서 해당 row 검색)
+                    excel_row = df[df["제품명"] == product_name]
+                    if not excel_row.empty:
+                        warning = excel_row.iloc[0].get("사용시주의사항", "")
+                        if isinstance(warning, str) and warning.strip():
+                            with st.expander("📌 사용시 주의사항 보기"):
+                                st.markdown(warning)
+                        else:
+                            st.info("⚠️ 주의사항 정보가 없습니다.")
+                else:
+                    st.warning("❗ 제품명을 찾지 못했습니다.")
+
+def chatbot3_page():
+    st.subheader("--기능3--")
+    st.write("--설명--")
 
     # 사용자 상태 초기화
     if 'forbid' not in st.session_state:
@@ -675,80 +766,33 @@ def chatbot_page():
                 except Exception as e:
                     st.error(f"GPT 응답 생성 중 오류 발생: {e}")
 
-# 챗봇 페이지 구현
-def chatbot2_page():
-    st.title("💊 AI 기반 약품 추천 챗봇")
-    st.markdown("사용자 질문에 따라 약 정보를 추천합니다.")
-    user_question = st.text_input("❓ 증상이나 궁금한 약을 입력하세요\n 예시) 내가 지금 몸이 열이 나고 콧물이 나서 코가 막혀 어떤 약이 좋을까? ")
-    df = load_excel_data()
-
-    if user_question:
-        if is_small_talk(user_question):
-            st.markdown("🤖 **기본 대화 응답입니다.**")
-            base_response = f"안녕하세요! 😊 무엇을 도와드릴까요?"
-            st.success("✅ AI 응답 완료")
-            st.markdown(base_response)
-
-        else:
-            st.markdown("🤖 **LlamaIndex 기반 RAG로 답변 중...**")
-            query_engine = get_query_engine()
-            response = query_engine.query(user_question)
-            st.success("✅ AI 응답 완료")
-
-            full_response = response.response
-
-            # 정규식으로 정보 추출
-            product_match = re.search(r"제품명\s*[:：]\s*(.+)", full_response)
-            class_match = re.search(r"구분\s*[:：]\s*(.+)", full_response)
-            effect_match = re.search(r"효능효과\s*[:：]\s*(.+)", full_response)
-
-            product_name = product_match.group(1).strip() if product_match else "알 수 없음"
-            product_class = class_match.group(1).strip() if class_match else ""
-            effect_text = effect_match.group(1).strip() if effect_match else ""
-
-            answer_text = full_response
-            for pattern in [r"제품명\s*[:：].+", r"구분\s*[:：].+", r"효능효과\s*[:：].+"]:
-                answer_text = re.sub(pattern, "", answer_text).strip()
-
-            if product_name.lower() != "알 수 없음":
-                if product_name.lower() != "xxx":
-                    st.markdown(f"### 💊 {product_name} ({product_class})")
-                    st.markdown(f"**AI 답변:** {answer_text}")
-
-                    # 🔹 구글 이미지 출력
-                    google_img_url = google_image_search(google_key, google_cse, product_name, num=1)
-                    if google_img_url:
-                        st.image(google_img_url[0], caption=f"{product_name} (검색 이미지)", width=300)
-                    else:
-                        st.info("🔍 구글 이미지 검색 결과 없음")
-
-                    # 🔹 추가 설명 출력
-                    st.markdown("추가적인 정보입니다.")
-                    st.markdown(f"💊 {product_name} ({product_class})")
-                    st.markdown(f"**효능효과:** {effect_text}")
-
-                    # 🔹 주의사항 출력 (엑셀에서 해당 row 검색)
-                    excel_row = df[df["제품명"] == product_name]
-                    if not excel_row.empty:
-                        warning = excel_row.iloc[0].get("사용시주의사항", "")
-                        if isinstance(warning, str) and warning.strip():
-                            with st.expander("📌 사용시 주의사항 보기"):
-                                st.markdown(warning)
-                        else:
-                            st.info("⚠️ 주의사항 정보가 없습니다.")
-                else:
-                    st.warning("❗ 제품명을 찾지 못했습니다.")
+    
 
 
 def main():
-    st.sidebar.title("서비스 선택")
-    page = st.sidebar.radio("메뉴", ["알약 이미지 검색", "약 정보 검색 챗봇"])
+    with st.sidebar:
+        page = option_menu(
+            "MENU",
+            ["소개", "알약 이미지 검색", "약 정보 검색 챗봇", "--기능3--"],
+            icons=["capsule", "camera", "robot", "cast"],
+            default_index=0,
+            styles={
+                "container": {"padding": "5px", "background-color": "#f0f0f0"},
+                "icon": {"color": "black", "font-size": "20px"},
+                "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px"},
+                "nav-link-selected": {"background-color": "#9a9a9a", "color": "white"},
+            }
+        )
 
-    if page == "알약 이미지 검색":
-        ocr_page()
-        chatbot_page()
+    # 라우팅
+    if page == "소개":
+        main_page()
+    elif page == "알약 이미지 검색":
+        chatbot1_page()
     elif page == "약 정보 검색 챗봇":
         chatbot2_page()
+    elif page == "--기능3--":
+        chatbot3_page()
 
 # 실행
 if __name__ == "__main__":
