@@ -1,4 +1,8 @@
 #pip install streamlit pandas pillow pytesseract requests
+#pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
+#pip install streamlit_calendar
+#pip install dotenv
+
 # 실행 : streamlit run app.py
 import json
 import datetime
@@ -64,33 +68,35 @@ def get_calendar_service(credentials):
     return build('calendar', 'v3', credentials=credentials)
 
 def create_medication_event(service, drug_name, dosage_time_list, start_date, end_date):
-    for time in dosage_time_list:
-        hour, minute = map(int, time.split(":"))
-        start_dt = datetime.datetime.combine(start_date, datetime.time(hour, minute))
-        end_dt = start_dt + datetime.timedelta(minutes=30)
+    current_date = start_date
+    while current_date <= end_date:
+        for time in dosage_time_list:
+            hour, minute = map(int, time.split(":"))
+            start_dt = datetime.datetime.combine(current_date, datetime.time(hour, minute))
+            end_dt = start_dt + datetime.timedelta(minutes=30)
 
-        event = {
-            'summary': f'💊 복약: {drug_name}',
-            'description': '약 복용 시간입니다.',
-            'start': {
-                'dateTime': start_dt.isoformat(),
-                'timeZone': 'Asia/Seoul',
-            },
-            'end': {
-                'dateTime': end_dt.isoformat(),
-                'timeZone': 'Asia/Seoul',
-            },
-            'recurrence': [
-                f'RRULE:FREQ=DAILY;UNTIL={end_date.strftime("%Y%m%d")}T000000Z'
-            ],
-            'reminders': {
-                'useDefault': False,
-                'overrides': [
-                    {'method': 'popup', 'minutes': 10},
-                ],
-            },
-        }
-        service.events().insert(calendarId='primary', body=event).execute()
+            event = {
+                'summary': f'💊 복약: {drug_name} ({time})',
+                'description': f'{drug_name} 복용 시간입니다.',
+                'start': {
+                    'dateTime': start_dt.isoformat(),
+                    'timeZone': 'Asia/Seoul',
+                },
+                'end': {
+                    'dateTime': end_dt.isoformat(),
+                    'timeZone': 'Asia/Seoul',
+                },
+                'reminders': {
+                    'useDefault': False,
+                    'overrides': [
+                        {'method': 'popup', 'minutes': 10},
+                    ],
+                },
+            }
+
+            service.events().insert(calendarId='primary', body=event).execute()
+
+        current_date += datetime.timedelta(days=1)
 
 def show_calendar(service, start_date, end_date):
     time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
@@ -161,6 +167,29 @@ def show_calendar(service, start_date, end_date):
     """
 
     st.components.v1.html(html_calendar, height=800, scrolling=True)
+
+def delete_medication_events(service, start_date, end_date):
+    time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
+    time_max = datetime.datetime.combine(end_date, datetime.time.max).isoformat() + 'Z'
+
+    events_result = service.events().list(
+        calendarId='primary',
+        timeMin=time_min,
+        timeMax=time_max,
+        singleEvents=True,
+        orderBy='startTime'
+    ).execute()
+
+    events = events_result.get('items', [])
+    deleted_count = 0
+
+    for event in events:
+        if '💊 복약:' in event.get('summary', ''):
+            service.events().delete(calendarId='primary', eventId=event['id']).execute()
+            deleted_count += 1
+
+    return deleted_count
+
 load_dotenv()
 # print(os.environ['OPENAI_API_KEY'])
 OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
@@ -539,32 +568,42 @@ def ocr_page():
             start_date = st.date_input("시작일")
             end_date = st.date_input("종료일")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔐 로그인 다시 시도"):
-                    if os.path.exists("token.json"):
-                        os.remove("token.json")
-                        st.success("✅ 기존 로그인 정보 삭제 완료. 다시 로그인 해주세요.")
+            if st.button("🔐 로그인 다시 시도"):
+                if os.path.exists("token.json"):
+                    os.remove("token.json")
+                    st.success("✅ 기존 로그인 정보 삭제 완료. 다시 로그인 해주세요.")
 
-            with col2:
-                if st.button("📅 복약 일정 등록"):
-                    if not dosage_times:
-                        st.warning("복약 시간을 선택해주세요.")
+            if st.button("🗑️ 기존 복약 일정 삭제"):
+                try:
+                    creds = st.session_state.get('google_credentials', get_google_credentials())
+                    service = get_calendar_service(creds)
+
+                    deleted = delete_medication_events(service, start_date, end_date)
+                    if deleted > 0:
+                        st.success(f"🗑️ 총 {deleted}개의 복약 일정이 삭제되었습니다.")
                     else:
-                        try:
-                            creds = get_google_credentials()
-                            st.session_state['google_credentials'] = creds
-                            service = get_calendar_service(creds)
+                        st.info("📭 삭제할 복약 일정이 없습니다.")
+                except Exception as e:
+                    st.error(f"❌ 일정 삭제 중 오류 발생: {e}")
 
-                            for key in st.session_state['basket']:
-                                drug_info = displayed_candidates[key]
-                                qty = st.session_state['basket'][key]["quantity"]
-                                create_medication_event(service, drug_info['제품명'], dosage_times, start_date, end_date)
+            if st.button("📅 복약 일정 등록"):
+                if not dosage_times:
+                    st.warning("복약 시간을 선택해주세요.")
+                else:
+                    try:
+                        creds = get_google_credentials()
+                        st.session_state['google_credentials'] = creds
+                        service = get_calendar_service(creds)
 
-                            st.success("✅ 복약 일정이 Google 캘린더에 등록되었습니다.")
-                            show_calendar(service, start_date, end_date)
-                        except Exception as e:
-                            st.error(f"❌ 로그인 실패 또는 캘린더 등록 실패: {e}")
+                        for key in st.session_state['basket']:
+                            drug_info = displayed_candidates[key]
+                            qty = st.session_state['basket'][key]["quantity"]
+                            create_medication_event(service, drug_info['제품명'], dosage_times, start_date, end_date)
+
+                        st.success("✅ 복약 일정이 Google 캘린더에 등록되었습니다.")
+                        show_calendar(service, start_date, end_date)
+                    except Exception as e:
+                        st.error(f"❌ 로그인 실패 또는 캘린더 등록 실패: {e}")
 
             st.subheader("💬 AI 복약 상담")
 
