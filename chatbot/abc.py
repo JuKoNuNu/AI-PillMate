@@ -125,7 +125,7 @@ def show_calendar(service, start_date, end_date):
         })
 
     event_js_array = json.dumps(event_list, ensure_ascii=False)
-
+    
     html_calendar = f"""
     <!DOCTYPE html>
     <html>
@@ -154,7 +154,11 @@ def show_calendar(service, start_date, end_date):
                     center: 'title',
                     right: 'dayGridMonth,timeGridWeek,timeGridDay'
                 }},
-                events: {event_js_array}
+                events: {event_js_array},
+                eventClick: function(info) {{
+                    info.jsEvent.preventDefault(); // prevent browser from navigating
+                    alert(info.event.title + "\\n\\n설명: " + (info.event.extendedProps.description || "없음"));
+                }}
             }});
             calendar.render();
         }});
@@ -616,28 +620,55 @@ def ocr_page():
                 if not question.strip():
                     st.warning("질문을 입력해주세요.")
                 else:
-                    st.session_state["question_history"].append(question)
                     st.header("💬 AI 복약 상담 결과")
 
                     basket_items = [displayed_candidates[key] for key in st.session_state['basket']]
                     quantities = [st.session_state['basket'][key]["quantity"] for key in st.session_state['basket']]
 
+                    answer_blocks = []
+
                     if is_combination_question(question):
-                        st.markdown(check_drug_interaction_summary(basket_items))
-                        st.markdown(check_ingredient_overlap_and_dosage(basket_items, quantities))
+                        interaction_summary = check_drug_interaction_summary(basket_items)
+                        dosage_check = check_ingredient_overlap_and_dosage(basket_items, quantities)
+
+                        st.markdown(interaction_summary)
+                        st.markdown(dosage_check)
+
+                        # 결과 저장
+                        full_answer = interaction_summary + "\n\n" + dosage_check
+                        st.session_state["question_history"].append({
+                            "question": question,
+                            "answer": full_answer
+                        })
                     else:
+                        full_answer = ""
                         for i, pill_info in enumerate(basket_items):
                             st.subheader(f"약 {i+1}: {pill_info['제품명']}")
                             answer = chat_with_pill_info(pill_info, question)
                             st.write(answer)
+                            full_answer += f"약 {i+1} ({pill_info['제품명']}): {answer}\n\n"
 
-                        st.markdown(check_drug_interaction_summary(basket_items))
-                        st.markdown(check_ingredient_overlap_and_dosage(basket_items, quantities))
+                        interaction_summary = check_drug_interaction_summary(basket_items)
+                        dosage_check = check_ingredient_overlap_and_dosage(basket_items, quantities)
 
+                        st.markdown(interaction_summary)
+                        st.markdown(dosage_check)
+
+                        full_answer += interaction_summary + "\n\n" + dosage_check
+
+                        # 결과 저장
+                        st.session_state["question_history"].append({
+                            "question": question,
+                            "answer": full_answer
+                        })
+
+            # 이전 질문 보기 (질문 + 답변)
             if st.session_state["question_history"]:
                 with st.expander("📝 이전 질문 보기"):
-                    for i, q in enumerate(reversed(st.session_state["question_history"]), 1):
-                        st.markdown(f"**{i}.** {q}")
+                    for i, qa in enumerate(reversed(st.session_state["question_history"]), 1):
+                        st.markdown(f"**{i}. 질문:** {qa['question']}")
+                        st.markdown(f"**답변:** {qa['answer']}")
+                        st.markdown("---")
 
 #=========================================================================================================
 # 메인 함수
