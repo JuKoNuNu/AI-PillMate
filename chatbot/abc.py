@@ -130,50 +130,101 @@ def show_calendar(service, start_date, end_date):
         event_js_array = json.dumps(event_list, ensure_ascii=False)
 
         html_calendar = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset='utf-8' />
-            <link href='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.css' rel='stylesheet'>
-            <script src='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js'></script>
-            <style>
-            #calendar {{
-                max-width: 1000px;
-                margin: 40px auto;
-            }}
-            </style>
-            <script>
-            document.addEventListener('DOMContentLoaded', function() {{
-                var calendarEl = document.getElementById('calendar');
-                var calendar = new FullCalendar.Calendar(calendarEl, {{
-                    initialView: 'timeGridWeek',
-                    locale: 'ko',
-                    allDaySlot: false,
-                    slotMinTime: "06:00:00",
-                    slotMaxTime: "23:59:59",
-                    height: 'auto',
-                    headerToolbar: {{
-                        left: 'prev,next today',
-                        center: 'title',
-                        right: 'dayGridMonth,timeGridWeek,timeGridDay'
-                    }},
-                    events: {event_js_array},
-                    eventClick: function(info) {{
-                        info.jsEvent.preventDefault();
-                        alert(info.event.title + "\\n\\n설명: " + (info.event.extendedProps.description || "없음"));
+            <!DOCTYPE html>
+            <html lang="ko">
+            <head>
+                <meta charset='utf-8' />
+                <link href='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.css' rel='stylesheet'>
+                <script src='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js'></script>
+                <script src="https://unpkg.com/@popperjs/core@2"></script>
+                <script src="https://unpkg.com/tippy.js@6"></script>
+                <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/animations/scale.css" />
+                <style>
+                    body {{
+                        font-family: 'Apple SD Gothic Neo', 'Segoe UI', sans-serif;
+                        margin: 0;
+                        padding: 0;
+                        background-color: #f9fafb;
                     }}
-                }});
-                calendar.render();
-            }});
-            </script>
-        </head>
-        <body>
-            <div id='calendar'></div>
-        </body>
-        </html>
-        """
+                    .fc {{
+                        max-width: 1000px;
+                        margin: 0 auto;
+                        padding: 20px;
+                        background-color: #ffffff;
+                        border-radius: 12px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+                    }}
+                    .fc-toolbar-title {{
+                        font-size: 1.6em;
+                        font-weight: bold;
+                        color: #1f2937;
+                    }}
+                    .fc-button {{
+                        background-color: #ffffff !important;
+                        border: 1px solid #d1d5db !important;
+                        color: #374151 !important;
+                        border-radius: 6px !important;
+                        font-size: 14px !important;
+                        padding: 5px 12px !important;
+                        box-shadow: none !important;
+                        transition: all 0.2s ease;
+                    }}
+                    .fc-button:hover {{
+                        background-color: #f3f4f6 !important;
+                    }}
+                    .fc-button-active, .fc-button:active {{
+                        background-color: #e0f2fe !important;
+                        color: #2563eb !important;
+                        border-color: #bfdbfe !important;
+                    }}
+                    .fc-button-primary:disabled {{
+                        background-color: #f3f4f6 !important;
+                        color: #9ca3af !important;
+                        border: 1px solid #e5e7eb !important;
+                    }}
+                </style>
 
-        st.components.v1.html(html_calendar, height=800, scrolling=True)
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {{
+                        var calendarEl = document.getElementById('calendar');
+                        var calendar = new FullCalendar.Calendar(calendarEl, {{
+                            initialView: 'dayGridMonth',
+                            locale: 'ko',
+                            headerToolbar: {{
+                                left: 'prev,next today',
+                                center: 'title',
+                                right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                            }},
+                            buttonText: {{
+                                today: '오늘',
+                                month: '월간',
+                                week: '주간',
+                                day: '일간',
+                                list: '목록'
+                            }},
+                            events: {event_js_array},
+                            eventDidMount: function(info) {{
+                                tippy(info.el, {{
+                                    content: info.event.extendedProps.description || "없음",
+                                    placement: 'top',
+                                    animation: 'scale',
+                                    theme: 'light-border'
+                                }});
+                            }}
+                        }});
+                        calendar.render();
+                    }});
+                </script>
+            </head>
+            <body>
+                <div id='calendar'></div>
+            </body>
+            </html>
+            """
+
+        st.components.v1.html(html_calendar, height=850, scrolling=True)
+
+
 
 def delete_medication_events(service, start_date, end_date):
     time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
