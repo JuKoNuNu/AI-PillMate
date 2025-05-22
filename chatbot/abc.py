@@ -1,7 +1,10 @@
 #pip install streamlit pandas pillow pytesseract requests
 # 실행 : streamlit run app.py
-
+import json
+import datetime
+import streamlit.components.v1 as components
 import os
+import os.path
 import re
 import requests
 import difflib
@@ -11,8 +14,8 @@ from PIL import Image
 import cv2
 import easyocr
 import streamlit as st
-from streamlit_option_menu import option_menu #추가해주셔야합니다!!
 from dotenv import load_dotenv
+from streamlit_calendar import calendar
 import openai
 from openai import OpenAI
 from llama_index.core import (
@@ -26,8 +29,138 @@ from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.response_synthesizers import get_response_synthesizer
 from llama_index.core.retrievers import VectorIndexRetriever
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+import datetime
 
 
+SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+
+def get_google_credentials():
+    creds = None
+
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+
+    if not creds or not creds.valid or not creds.refresh_token:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'credentials.json', SCOPES
+            )
+            creds = flow.run_local_server(port=8080, access_type='offline', prompt='consent')
+
+        # 새로 발급받은 토큰 저장
+        with open('token.json', 'w') as token_file:
+            token_file.write(creds.to_json())
+
+    return creds
+
+
+def get_calendar_service(credentials):
+    return build('calendar', 'v3', credentials=credentials)
+
+def create_medication_event(service, drug_name, dosage_time_list, start_date, end_date):
+    for time in dosage_time_list:
+        hour, minute = map(int, time.split(":"))
+        start_dt = datetime.datetime.combine(start_date, datetime.time(hour, minute))
+        end_dt = start_dt + datetime.timedelta(minutes=30)
+
+        event = {
+            'summary': f'💊 복약: {drug_name}',
+            'description': '약 복용 시간입니다.',
+            'start': {
+                'dateTime': start_dt.isoformat(),
+                'timeZone': 'Asia/Seoul',
+            },
+            'end': {
+                'dateTime': end_dt.isoformat(),
+                'timeZone': 'Asia/Seoul',
+            },
+            'recurrence': [
+                f'RRULE:FREQ=DAILY;UNTIL={end_date.strftime("%Y%m%d")}T000000Z'
+            ],
+            'reminders': {
+                'useDefault': False,
+                'overrides': [
+                    {'method': 'popup', 'minutes': 10},
+                ],
+            },
+        }
+        service.events().insert(calendarId='primary', body=event).execute()
+
+def show_calendar(service, start_date, end_date):
+    time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
+    time_max = datetime.datetime.combine(end_date, datetime.time.max).isoformat() + 'Z'
+
+    events_result = service.events().list(
+        calendarId='primary',
+        timeMin=time_min,
+        timeMax=time_max,
+        singleEvents=True,
+        orderBy='startTime'
+    ).execute()
+
+    events = events_result.get('items', [])
+
+    if not events:
+        st.info("📭 등록된 복약 일정이 없습니다.")
+        return
+
+    event_list = []
+    for event in events:
+        event_list.append({
+            "title": event.get("summary", "제목 없음"),
+            "start": event["start"].get("dateTime", event["start"].get("date")),
+            "end": event["end"].get("dateTime", event["end"].get("date"))
+        })
+
+    event_js_array = json.dumps(event_list, ensure_ascii=False)
+
+    html_calendar = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset='utf-8' />
+        <link href='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.css' rel='stylesheet'>
+        <script src='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js'></script>
+        <style>
+        #calendar {{
+            max-width: 1000px;
+            margin: 40px auto;
+        }}
+        </style>
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {{
+            var calendarEl = document.getElementById('calendar');
+            var calendar = new FullCalendar.Calendar(calendarEl, {{
+                initialView: 'timeGridWeek',
+                locale: 'ko',
+                allDaySlot: false,
+                slotMinTime: "06:00:00",
+                slotMaxTime: "23:59:59",
+                height: 'auto',
+                headerToolbar: {{
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                }},
+                events: {event_js_array}
+            }});
+            calendar.render();
+        }});
+        </script>
+    </head>
+    <body>
+        <div id='calendar'></div>
+    </body>
+    </html>
+    """
+
+    st.components.v1.html(html_calendar, height=800, scrolling=True)
 load_dotenv()
 # print(os.environ['OPENAI_API_KEY'])
 OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
@@ -315,35 +448,14 @@ def find_related_drugs(excel_df, user_query, top_n=5):
 
     columns_needed = ['제품명', '효능효과', '구분', '저장_이미지_파일명', '사용시주의사항']
     return matched[columns_needed].drop_duplicates().head(top_n)
+#====================================================================================================================
+def ocr_page():
+    st.title("약 이미지 인식 기반 정보 제공 시스템")
 
-
-# 메인 함수
-## 메인 소개 페이지
-
-def main_page():
-    st.markdown("""
-        <h1 style='text-align: center; margin-bottom: 60px;'>💊 AI 기반 다제약물(중복 복용) 예방 챗봇</h1>
-        <h3 style='text-align: left; margin-top: 60px;'>안녕하세요. 비대면 개인 건강 비서입니다!</h3>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-        <div style='
-            margin-top: 30px; border: 2px solid #ccc; border-radius: 10px; padding: 20px; background-color: #f9f9f9;
-        '>
-                이 챗봇은 다음과 같은 기능을 제공합니다: <br><br>
-            📷 <b>알약 이미지 검색</b>: 사진을 업로드하면 알약을 인식하여 복용 중복 가능 정보를 확인할 수 있어요.<br><br>
-            🤖 <b>약 정보 검색 챗봇</b>: 궁금한 약 정보 질문을 하고, AI로부터 답변을 받아보세요.<br><br>
-            💡 <b>기능3</b>: --------<br><br>
-        </div>
-
-        <p style='margin-top: 30px;'>▶ 왼쪽 사이드바에서 기능을 선택해주세요!</p>
-    """, unsafe_allow_html=True)
-
-
-## 기능 1 (ocr)
-
-def chatbot1_page():
-    st.subheader("약 이미지 인식 기반 정보 제공 시스템")
+    if "google_credentials" not in st.session_state:
+        st.session_state["google_credentials"] = None
+    if "basket" not in st.session_state:
+        st.session_state["basket"] = {}
 
     marge_all = pd.read_excel("final_data.xlsx")
     for col in ['제품명', '업체명', '식별표기']:
@@ -420,33 +532,80 @@ def chatbot1_page():
         basket_items = [displayed_candidates[key] for key in st.session_state['basket'].keys()]
         quantities = [st.session_state['basket'][key]['quantity'] for key in st.session_state['basket'].keys()]
 
-        if basket_items:
-            st.header("선택한 약과 수량을 확인하고 궁금한 점을 입력하세요")
-            question = st.text_input("ex) 보관방법이 어떻게 되나요?, 이 약들을 같이 먹어도 괜찮나요?")
+        if st.session_state.get('basket'):
+            st.subheader("3️⃣ 복약 일정 설정")
 
-            if question:
-                if is_combination_question(question):
-                    # 병용 질문일 때
-                    st.markdown(check_drug_interaction_summary(basket_items))
-                    st.markdown(check_ingredient_overlap_and_dosage(basket_items, quantities))
+            dosage_times = st.multiselect("복용 시간 선택", ["06:00", "09:00", "12:00", "15:00", "18:00", "21:00", "24:00"])
+            start_date = st.date_input("시작일")
+            end_date = st.date_input("종료일")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔐 로그인 다시 시도"):
+                    if os.path.exists("token.json"):
+                        os.remove("token.json")
+                        st.success("✅ 기존 로그인 정보 삭제 완료. 다시 로그인 해주세요.")
+
+            with col2:
+                if st.button("📅 복약 일정 등록"):
+                    if not dosage_times:
+                        st.warning("복약 시간을 선택해주세요.")
+                    else:
+                        try:
+                            creds = get_google_credentials()
+                            st.session_state['google_credentials'] = creds
+                            service = get_calendar_service(creds)
+
+                            for key in st.session_state['basket']:
+                                drug_info = displayed_candidates[key]
+                                qty = st.session_state['basket'][key]["quantity"]
+                                create_medication_event(service, drug_info['제품명'], dosage_times, start_date, end_date)
+
+                            st.success("✅ 복약 일정이 Google 캘린더에 등록되었습니다.")
+                            show_calendar(service, start_date, end_date)
+                        except Exception as e:
+                            st.error(f"❌ 로그인 실패 또는 캘린더 등록 실패: {e}")
+
+            st.subheader("💬 AI 복약 상담")
+
+            if "question_history" not in st.session_state:
+                st.session_state["question_history"] = []
+
+            question = st.text_area("궁금한 점을 입력해 주세요 (예: 같이 먹어도 되나요?, 보관 방법은?)", height=100)
+
+            if st.button("💬 AI 질문하기"):
+                if not question.strip():
+                    st.warning("질문을 입력해주세요.")
                 else:
-                    # 개별 약 질문일 때
-                    for i, pill_info in enumerate(basket_items):
-                        st.subheader(f"약 {i+1}: {pill_info['제품명']}")
-                        answer = chat_with_pill_info(pill_info, question)
-                        st.write(answer)
+                    st.session_state["question_history"].append(question)
+                    st.header("💬 AI 복약 상담 결과")
 
-                    st.markdown(check_drug_interaction_summary(basket_items))
-                    st.markdown(check_ingredient_overlap_and_dosage(basket_items, quantities))
+                    basket_items = [displayed_candidates[key] for key in st.session_state['basket']]
+                    quantities = [st.session_state['basket'][key]["quantity"] for key in st.session_state['basket']]
 
-        else:
-            st.info("선택한 약이 없습니다.")
+                    if is_combination_question(question):
+                        st.markdown(check_drug_interaction_summary(basket_items))
+                        st.markdown(check_ingredient_overlap_and_dosage(basket_items, quantities))
+                    else:
+                        for i, pill_info in enumerate(basket_items):
+                            st.subheader(f"약 {i+1}: {pill_info['제품명']}")
+                            answer = chat_with_pill_info(pill_info, question)
+                            st.write(answer)
 
+                        st.markdown(check_drug_interaction_summary(basket_items))
+                        st.markdown(check_ingredient_overlap_and_dosage(basket_items, quantities))
 
+            if st.session_state["question_history"]:
+                with st.expander("📝 이전 질문 보기"):
+                    for i, q in enumerate(reversed(st.session_state["question_history"]), 1):
+                        st.markdown(f"**{i}.** {q}")
 
-## 기능 2 (챗봇)
+#=========================================================================================================
+# 메인 함수
+
+# 챗봇 페이지 구현
 def chatbot2_page():
-    st.subheader("💊 AI 기반 약품 추천 챗봇")
+    st.title("💊 AI 기반 약품 추천 챗봇")
     st.markdown("사용자 질문에 따라 약 정보를 추천합니다.")
     user_question = st.text_input("❓ 증상이나 궁금한 약을 입력하세요\n 예시) 내가 지금 몸이 열이 나고 콧물이 나서 코가 막혀 어떤 약이 좋을까? ")
     df = load_excel_data()
@@ -508,291 +667,15 @@ def chatbot2_page():
                 else:
                     st.warning("❗ 제품명을 찾지 못했습니다.")
 
-def chatbot3_page():
-    st.subheader("--기능3--")
-    st.write("--설명--")
-
-    # 사용자 상태 초기화
-    if 'forbid' not in st.session_state:
-        st.session_state.forbid = '해당 사항 없음'
-    
-    # 선택된 약품 목록 초기화
-    if 'selected_drugs' not in st.session_state:
-        st.session_state.selected_drugs = []
-        
-    # 요청 상태 초기화 (NEW: 요청 버튼 상태 관리)
-    if 'request_submitted' not in st.session_state:
-        st.session_state.request_submitted = False
-
-    st.subheader("⚠️ 사용자 상태 선택")
-    forbid_options = ['임산부', '노인', '중복의약품 문의', '해당 사항 없음']    # 버튼 작업 완료
-    cols = st.columns(len(forbid_options))
-    for i, option in enumerate(forbid_options):
-        if cols[i].button(option, key=f"btn_{i}"):
-            st.session_state.forbid = option
-            # 상태가 변경되면 선택된 약품 목록 초기화
-            st.session_state.selected_drugs = []
-            # 요청 상태 초기화 (NEW)
-            st.session_state.request_submitted = False
-            st.success(f"선택된 사용자 상태: {option}")
-    
-    # 데이터
-    marge_all = pd.read_excel("final_data.xlsx")
-    main_df, preg_df, old_df, dup_df =  marge_all
-
-    # [UPDATED] 중복의약품 문의 전용 입력 구성 - 반응형 개선 및 중복 ID 해결
-    placeholder = st.empty()
-    
-    # 중복의약품 문의 전용 입력 및 처리
-    if st.session_state.forbid == '중복의약품 문의':
-        # 중복의약품 문의 전용 입력 필드
-        dup_question = st.text_input("📝 질문 또는 증상을 입력하세요 (예: 중복복용 등)", key="dup_question_input")
-        
-        with placeholder.container():
-            st.markdown("### 💊 현재 드시고 계신 의약품 관련 정보 입력")
-
-            with st.expander("중복 복용 주의 의약품 카테고리 확인하기", expanded=True):
-                dup_categories = [
-                    '선택하세요', '혈압강하작용의약품', '당뇨병용제', '지질저하제', '소화성궤양용제',
-                    '해열진통소염제', '정신신경용제', '호흡기관용약', '마약류 아편유사제', '최면진정제'
-                ]
-                selected_category = st.selectbox("📂 카테고리 선택", dup_categories, key="dup_category_select")
-
-                if selected_category != '선택하세요':
-                    related_dup_drugs = dup_df[dup_df['효능군'] == selected_category]
-                    
-                    if not related_dup_drugs.empty:
-                        st.markdown(f"#### 📋 '{selected_category}' 관련 의약품 목록:")
-                        
-                        # 최대 10개만 표시 (토큰 제한 방지)
-                        display_count = min(10, len(related_dup_drugs))
-                        
-                        # 중복 키 문제 해결: 인덱스를 추가하여 고유한 키 생성
-                        for i in range(display_count):
-                            row = related_dup_drugs.iloc[i]
-                            product_name = row['제품명']
-                            
-                            # 고유한 키 생성 방법 - 인덱스 값을 함께 사용
-                            unique_key = f"drug_{i}_{product_name}"
-                            
-                            # 체크박스로 약품 선택 기능 구현 (고유한 키 사용)
-                            if st.checkbox(f"{product_name}", key=unique_key):
-                                # 선택된 약품 목록에 추가 (중복 방지)
-                                if product_name not in st.session_state.selected_drugs:
-                                    st.session_state.selected_drugs.append(product_name)
-                            elif product_name in st.session_state.selected_drugs:
-                                # 체크 해제 시 목록에서 제거
-                                st.session_state.selected_drugs.remove(product_name)
-                                
-                        # 더 많은 약품이 있으면 알림
-                        if len(related_dup_drugs) > 10:
-                            st.info(f"표시된 약품 외에 {len(related_dup_drugs) - 10}개 더 있습니다. 검색 기능을 사용해보세요.")
-                    else:
-                        st.info("선택한 카테고리에 해당하는 의약품 정보가 없습니다.")
-            
-            # 선택된 약품 목록 표시
-            if st.session_state.selected_drugs:
-                st.markdown("### 🔍 선택된 약품 목록")
-                for selected_drug in st.session_state.selected_drugs:
-                    st.markdown(f"- {selected_drug}")
-        
-
-        # GPT 응답 & 약물 정보 제공공 (중복의약품 문의) - 요청 버튼 추가 (NEW)
-        if dup_question and st.session_state.selected_drugs:
-            # 요청 버튼 추가 (NEW)
-            request_button = st.button("📤 요청하기", key="submit_dup_request")
-            
-            # 요청 버튼을 누르면 요청 상태를 True로 설정 (NEW)
-            if request_button:
-                st.session_state.request_submitted = True
-                st.success("요청이 제출되었습니다.")
-
-                # --- 현재 작업중 ------------------------------------------------------------------------------------------------------------------------------
-
-                if dup_question and st.session_state.request_submitted:
-                    with st.spinner("관련 약품을 찾는 중입니다..."):
-                        drug_df = find_related_drugs(main_df, selected_drug)
-
-                    if drug_df.empty:
-                        st.error("❌ 해당 키워드와 관련된 약품을 찾을 수 없습니다.")
-                        
-                    else:
-                        # 결과 개수 제한 (최대 5개)
-                        display_count = min(5, len(drug_df))
-                        limited_drug_df = drug_df.head(display_count)
-                        
-                        drug_summary_text = "🔎 관련 약품 목록:\n"
-                        for _, row in limited_drug_df.iterrows():
-                            name = row['제품명']
-                            image_filename = row['저장_이미지_파일명']
-                            image_path = os.path.join("images", image_filename)
-
-                            if os.path.exists(image_path):
-                                st.image(image_path, caption=name, width=300)
-                            else:
-                                st.warning(f"이미지 없음: {image_filename}")
-
-                            st.markdown(f"**💊 {name}** ({row['구분']})")
-                            st.markdown(f"**효능:** {row['효능효과']}")
-
-                            precautions = row.get("주의사항_병합", "")
-                            if pd.notna(precautions) and str(precautions).strip() != "":
-                                with st.expander("📌 사용 시 주의사항 보기"):
-                                    st.markdown(str(precautions))
-                            else:
-                                st.markdown("ℹ️ 사용 시 주의사항 정보 없음")
-
-
-                # --- 현재 작업중 -------------------------------------------------------------------------------------------------------------------------------
-            
-            # 요청 버튼이 눌려진 상태일 때만 API 호출 실행 (NEW)
-            if st.session_state.request_submitted:
-                # 선택된 약품만 포함하여 요약 생성 (토큰 제한 문제 해결)
-                drug_dup_summary_text = "🔎 관련 약품 목록:\n"
-                for drug in st.session_state.selected_drugs:
-                    drug_dup_summary_text += f"- {drug}\n"
-                
-                messages = [
-                    {"role": "system", "content": "당신은 약물 복용 정보와 병용 금기 등에 대해 답변하는 약사 AI입니다."},
-                    {"role": "user", "content": f"아래 약 정보 참고해서 답변해주세요:\n{drug_dup_summary_text}\n\n질문: {dup_question}"}
-                ]
-                
-                # 디버깅용 메시지 출력 (선택사항)
-                print(messages)
-                
-                try:
-                    response = client.chat.completions.create(
-                        model=os.environ['OPENAI_API_MODEL'],
-                        messages=messages,
-                        temperature=0.5,
-                        max_tokens=500,
-                    )
-                    answer = response.choices[0].message.content
-                    st.markdown("### 💡 GPT 답변:")
-                    st.markdown(answer)
-                    
-                except Exception as e:
-                    st.error(f"GPT 응답 생성 중 오류 발생: {e}")
-                    st.info("💡 팁: 선택한 약품이 너무 많으면 토큰 제한에 걸릴 수 있습니다. 필요한 약품만 선택해주세요.")
-        elif dup_question and not st.session_state.selected_drugs:
-            st.warning("⚠️ 질문하기 전에 약품을 하나 이상 선택해주세요.")
-    else:
-        # 일반 질문 입력 필드 (중복의약품 문의가 아닐 때만 표시)
-        user_question = st.text_input("📝 질문 또는 증상을 입력하세요 (예: 감기, 비타민 등)", key="general_question_input")
-        
-        # 요청 버튼 추가 (NEW)
-        if user_question:
-            request_button = st.button("📤 요청하기", key="submit_general_request")
-            
-            # 요청 버튼을 누르면 요청 상태를 True로 설정 (NEW)
-            if request_button:
-                st.session_state.request_submitted = True
-                st.success("요청이 제출되었습니다.")
-        
-        # 일반 질문에 대한 처리 - 요청 버튼이 눌려진 상태일 때만 실행 (NEW)
-        if user_question and st.session_state.request_submitted:
-            with st.spinner("관련 약품을 찾는 중입니다..."):
-                drug_df = find_related_drugs(main_df, user_question)
-
-            if drug_df.empty:
-                st.error("❌ 해당 키워드와 관련된 약품을 찾을 수 없습니다.")
-                
-            else:
-                # 결과 개수 제한 (최대 5개)
-                display_count = min(5, len(drug_df))
-                limited_drug_df = drug_df.head(display_count)
-                
-                drug_summary_text = "🔎 관련 약품 목록:\n"
-                for _, row in limited_drug_df.iterrows():
-                    name = row['제품명']
-                    image_filename = row['저장_이미지_파일명']
-                    image_path = os.path.join("images", image_filename)
-
-                    if os.path.exists(image_path):
-                        st.image(image_path, caption=name, width=300)
-                    else:
-                        st.warning(f"이미지 없음: {image_filename}")
-
-                    st.markdown(f"**💊 {name}** ({row['구분']})")
-                    st.markdown(f"**효능:** {row['효능효과']}")
-
-                    precautions = row.get("주의사항_병합", "")
-                    if pd.notna(precautions) and str(precautions).strip() != "":
-                        with st.expander("📌 사용 시 주의사항 보기"):
-                            st.markdown(str(precautions))
-                    else:
-                        st.markdown("ℹ️ 사용 시 주의사항 정보 없음")
-
-                    # 사용자 상태에 따라 추가 정보 출력
-                    if st.session_state.forbid == '임산부':
-                        preg_info = preg_df[preg_df['제품명'] == name]
-                        if not preg_info.empty:
-                            st.error("🚨 임산부 금기 약물입니다!")
-                            st.markdown(f"**금기등급:** {preg_info.iloc[0]['금기등급']}")
-                            st.markdown(f"**상세정보:** {preg_info.iloc[0]['상세정보']}")
-
-                    elif st.session_state.forbid == '노인':
-                        old_info = old_df[old_df['제품명'] == name]
-                        if not old_info.empty:
-                            st.warning("⚠️ 노인 주의 약물입니다.")
-                            st.markdown(f"**약품상세정보:** {old_info.iloc[0]['약품상세정보']}")
-
-                    st.markdown("---")
-                    drug_summary_text += f"- {name}\n"
-                
-                # 더 많은 결과가 있음을 알림
-                if len(drug_df) > display_count:
-                    st.info(f"⚠️ 검색 결과가 많아 상위 {display_count}개만 표시합니다. (총 {len(drug_df)}개 검색됨)")
-
-                # GPT 응답 (일반 질문)
-                messages = [
-                    {"role": "system", "content": "당신은 약물 복용 정보와 병용 금기 등에 대해 답변하는 약사 AI입니다."},
-                    {"role": "user", "content": f"아래 약 정보 참고해서 답변해주세요:\n{drug_summary_text}\n\n질문: {user_question}"}
-                ]
-                
-                # 디버깅용 메시지 출력 (선택사항)
-                print(messages)
-
-                try:
-                    response = client.chat.completions.create(
-                        model=os.environ['OPENAI_API_MODEL'],
-                        messages=messages,
-                        temperature=0.5,
-                        max_tokens=500,
-                    )
-                    answer = response.choices[0].message.content
-                    st.markdown("### 💡 GPT 답변:")
-                    st.markdown(answer)
-                except Exception as e:
-                    st.error(f"GPT 응답 생성 중 오류 발생: {e}")
-
-    
-
 
 def main():
-    with st.sidebar:
-        page = option_menu(
-            "MENU",
-            ["소개", "알약 이미지 검색", "약 정보 검색 챗봇", "--기능3--"],
-            icons=["capsule", "camera", "robot", "cast"],
-            default_index=0,
-            styles={
-                "container": {"padding": "5px", "background-color": "#f0f0f0"},
-                "icon": {"color": "black", "font-size": "20px"},
-                "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px"},
-                "nav-link-selected": {"background-color": "#9a9a9a", "color": "white"},
-            }
-        )
+    st.sidebar.title("서비스 선택")
+    page = st.sidebar.radio("메뉴", ["알약 이미지 검색", "약 정보 검색 챗봇"])
 
-    # 라우팅
-    if page == "소개":
-        main_page()
-    elif page == "알약 이미지 검색":
-        chatbot1_page()
+    if page == "알약 이미지 검색":
+        ocr_page()
     elif page == "약 정보 검색 챗봇":
         chatbot2_page()
-    elif page == "--기능3--":
-        chatbot3_page()
 
 # 실행
 if __name__ == "__main__":
