@@ -1,6 +1,4 @@
 # streamlit run final_code.py
-from message import del_lgh_start
-
 from streamlit_option_menu import option_menu
 import json
 import datetime
@@ -105,10 +103,19 @@ def create_medication_event(service, drug_name, dosage_time_list, start_date, en
     created = service.events().insert(calendarId='primary', body=event).execute()
 
 
-import json
+def get_usage_instruction(excel_data, product_name: str) -> str:
+    product_name = str(product_name).strip().lower()  # 공백 제거 및 소문자 처리
+    excel_data = excel_data.copy()
+    excel_data['제품명_정리'] = excel_data['제품명'].astype(str).str.strip().str.lower()
+
+    matched = excel_data.loc[
+    excel_data['제품명_정리'] == product_name,
+        '용법용량'
+    ]
+    return matched.iloc[0] if not matched.empty and pd.notna(matched.iloc[0]) else "없음"
+
 
 def show_calendar(service, start_date, end_date):
-    st.write(f"📅 캘린더 이벤트 미리보기 (범위: {start_date} ~ {end_date})")
 
     try:
         time_min = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
@@ -159,54 +166,100 @@ def show_calendar(service, start_date, end_date):
         return
 
     html_calendar = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset='utf-8' />
-        <link href='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.css' rel='stylesheet'>
-        <script src='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js'></script>
-        <style>
-        #calendar {{
-            max-width: 1000px;
-            margin: 40px auto;
-        }}
-        </style>
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {{
-            var calendarEl = document.getElementById('calendar');
-            var calendar = new FullCalendar.Calendar(calendarEl, {{
-                initialView: 'timeGridWeek',
-                locale: 'ko',
-                timeZone: 'Asia/Seoul',
-                nowIndicator: true,
-                allDaySlot: false,
-                slotMinTime: "06:00:00",
-                slotMaxTime: "23:59:59",
-                height: 'auto',
-                headerToolbar: {{
-                    left: 'prev,next today',
-                    center: 'title',
-                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
-                }},
-                events: {event_js_array},
-                eventClick: function(info) {{
-                    info.jsEvent.preventDefault();
-                    alert(info.event.title + "\\n\\n설명: " + (info.event.extendedProps.description || "없음"));
-                }}
-            }});
-            calendar.render();
-        }});
-        </script>
-    </head>
-    <body>
-        <div id='calendar'></div>
-    </body>
-    </html>
-    """
+            <!DOCTYPE html>
+            <html lang="ko">
+            <head>
+                <meta charset='utf-8' />
+                <link href='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.css' rel='stylesheet'>
+                <script src='https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js'></script>
+                <script src="https://unpkg.com/@popperjs/core@2"></script>
+                <script src="https://unpkg.com/tippy.js@6"></script>
+                <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/animations/scale.css" />
+                <style>
+                    body {{
+                        font-family: 'Apple SD Gothic Neo', 'Segoe UI', sans-serif;
+                        margin: 0;
+                        padding: 0;
+                        background-color: #f9fafb;
+                    }}
+                    .fc {{
+                        max-width: 1000px;
+                        margin: 0 auto;
+                        padding: 20px;
+                        background-color: #ffffff;
+                        border-radius: 12px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+                    }}
+                    .fc-toolbar-title {{
+                        font-size: 1.6em;
+                        font-weight: bold;
+                        color: #1f2937;
+                    }}
+                    .fc-button {{
+                        background-color: #ffffff !important;
+                        border: 1px solid #d1d5db !important;
+                        color: #374151 !important;
+                        border-radius: 6px !important;
+                        font-size: 14px !important;
+                        padding: 5px 12px !important;
+                        box-shadow: none !important;
+                        transition: all 0.2s ease;
+                    }}
+                    .fc-button:hover {{
+                        background-color: #f3f4f6 !important;
+                    }}
+                    .fc-button-active, .fc-button:active {{
+                        background-color: #e0f2fe !important;
+                        color: #2563eb !important;
+                        border-color: #bfdbfe !important;
+                    }}
+                    .fc-button-primary:disabled {{
+                        background-color: #f3f4f6 !important;
+                        color: #9ca3af !important;
+                        border: 1px solid #e5e7eb !important;
+                    }}
+                </style>
+
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {{
+                        var calendarEl = document.getElementById('calendar');
+                        var calendar = new FullCalendar.Calendar(calendarEl, {{
+                            initialView: 'dayGridMonth',
+                            locale: 'ko',
+                            headerToolbar: {{
+                                left: 'prev,next today',
+                                center: 'title',
+                                right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                            }},
+                            buttonText: {{
+                                today: '오늘',
+                                month: '월간',
+                                week: '주간',
+                                day: '일간',
+                                list: '목록'
+                            }},
+                            events: {event_js_array},
+                            eventDidMount: function(info) {{
+                                tippy(info.el, {{
+                                    content: info.event.extendedProps.description || "없음",
+                                    placement: 'top',
+                                    animation: 'scale',
+                                    theme: 'light-border'
+                                }});
+                            }}
+                        }});
+                        calendar.render();
+                    }});
+                </script>
+            </head>
+            <body>
+                <div id='calendar'></div>
+            </body>
+            </html>
+            """
 
     try:
         st.components.v1.html(html_calendar, height=850, scrolling=True)
-        st.success("✅ HTML 캘린더 렌더링 성공")
     except Exception as e:
         st.error(f"❌ HTML 렌더링 실패: {e}")
 
@@ -898,12 +951,18 @@ def chatbot3_page():
             st.title("💊 복약 일정 캘린더 등록")
 
             excel_data = load_excel_data()
-            dosage_times = st.multiselect("복약 시간 선택", ["09:00", "13:00", "18:00", "21:00"])
+            dosage_times = st.multiselect("복약 시간 선택", ["05:00", "06:00", "07:00", "08:00","09:00", "10:00", "11:00", "12:00","13:00", "14:00", "15:00", "16:00","17:00", "18:00", "19:00", "20:00","21:00","22:00","23:00"])
             start_date = st.date_input("시작 날짜", datetime.date.today())
             end_date = st.date_input("종료 날짜", datetime.date.today())
+                                     
+            basket_items = [displayed_candidates[key] for key in st.session_state['basket'].keys()]
+            quantities = [st.session_state['basket'][key]['quantity'] for key in st.session_state['basket'].keys()]
 
-            basket = st.session_state.get('basket', {"select_0": {"quantity": 1}})
-            displayed_candidates = {"select_0": {"제품명": "넥포정5/160밀리그램"}}
+            if st.button("🔐 로그인 다시 시도"):
+                if os.path.exists("token.json"):
+                    os.remove("token.json")
+                    st.success("✅ 기존 로그인 정보 삭제 완료. 다시 로그인 해주세요.")
+
 
             if st.button("📅 복약 일정 등록"):
                 creds = st.session_state.get("creds") or get_google_credentials()
@@ -911,30 +970,23 @@ def chatbot3_page():
                 service = get_calendar_service(creds)
                 st.session_state["service"] = service
 
-                num = 0
+                # ✅ 리팩터링된 방식
+                basket_items = [displayed_candidates[key] for key in st.session_state['basket'].keys()]
+                quantities = [st.session_state['basket'][key]['quantity'] for key in st.session_state['basket'].keys()]
 
-                for key in basket:
-                    if num>4:
+                for idx, drug_info in enumerate(basket_items):
+                    if idx > 4:
                         break
-                    drug_info = displayed_candidates.get(key)
-                    if not drug_info:
-                        continue
-                    product_name = str(drug_info["제품명"]).strip()
-                    matched = excel_data.loc[
-                        excel_data['제품명'].astype(str).str.strip() == product_name,
-                        '용법용량'
-                    ]
-                    usage_instruction = matched.iloc[0] if not matched.empty and pd.notna(matched.iloc[0]) else "없음"
+                    product_name = drug_info["제품명"]
 
+                    usage_instruction = get_usage_instruction(excel_data, product_name)
                     create_medication_event(service, product_name, dosage_times, start_date, end_date, usage_instruction)
-                    num+1
 
                 st.success("✅ 복약 일정이 Google 캘린더에 등록되었습니다.")
                 st.session_state["calendar_done"] = True
 
             if st.session_state.get("calendar_done") and "service" in st.session_state:
                 show_calendar(st.session_state["service"], start_date, end_date)
-
             if st.button("🗑️ 복약 일정 삭제하기"):
                 try:
                     deleted = delete_medication_events(
@@ -1014,7 +1066,6 @@ def chatbot3_page():
            
             # UI 
 def main():
-    del_lgh_start()
     with st.sidebar:
         page = option_menu(
             "MENU",
