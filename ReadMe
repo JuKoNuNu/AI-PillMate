@@ -1,0 +1,79 @@
+# setup_guide.md
+
+# PillMate 설치 및 실행 가이드
+
+## 1. 환경 설정
+
+### Python 가상환경 생성
+```bash
+python -m venv pillmate_env
+source pillmate_env/bin/activate  # Windows: pillmate_env\Scripts\activate
+```
+
+### 패키지 설치
+```bash
+pip install -r requirements.txt
+```
+
+## 2. 환경변수 설정 (.env 파일)
+
+```env
+OPENAI_API_KEY=your_openai_api_key_here
+GOOGLE_API_KEY=your_google_api_key_here
+GOOGLE_CSE_ID=your_google_cse_id_here
+```
+
+## 3. 구글 캘린더 API 설정
+
+1. Google Cloud Console에서 프로젝트 생성
+2. Calendar API 활성화
+3. OAuth 2.0 클라이언트 ID 생성
+4. `credentials.json` 파일을 프로젝트 루트에 저장
+
+## 4. 데이터 파일 준비
+
+다음 파일들을 `data/` 폴더에 준비:
+- `txta.xlsx` - RAG용 약물 데이터
+- `final_data.xlsx` - 메인 약물 데이터
+- `pregnant_warning.xlsx` - 임산부 금기 약물 데이터
+
+## 5. 실행
+
+```bash
+streamlit run main.py
+```
+
+## 6. 프로젝트 구조
+
+```
+pillmate/
+├── main.py
+├── requirements.txt
+├── .env
+├── credentials.json
+├── config/
+│   ├── __init__.py
+│   └── settings.py
+├── core/
+│   ├── __init__.py
+│   ├── ocr_processor.py
+│   ├── drug_matcher.py
+│   └── ai_engine.py
+├── services/
+│   ├── __init__.py
+│   ├── calendar_service.py
+│   ├── search_service.py
+│   └── drug_service.py
+├── utils/
+│   ├── __init__.py
+│   ├── data_loader.py
+│   ├── text_processor.py
+│   └── validators.py
+├── ui/
+│   ├── __init__.py
+│   ├── pages.py
+│   └── components.py
+└── data/
+    ├── txta.xlsx
+    ├── final_data.xlsx
+    └── pregnant_warning.xlsx
